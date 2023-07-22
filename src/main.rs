@@ -164,7 +164,7 @@ impl Plugin for Keybinds {
     }
 }
 
-num Layout {
+enum Layout {
     Grid(u16),
     Slide,
     Opt,
