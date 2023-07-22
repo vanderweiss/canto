@@ -1,4 +1,4 @@
-use bevy::{app::AppExit, prelude::*};
+use bevy::{app::AppExit, ecs::system::EntityCommands, prelude::*};
 
 use ignore::WalkBuilder;
 
@@ -17,7 +17,7 @@ struct Watchdog;
 struct Root;
 
 #[derive(Component)]
-struct Picture {
+struct Media {
     selected: bool,
 }
 
@@ -27,19 +27,77 @@ struct Frame;
 #[derive(Component)]
 struct Content;
 
+enum Layout {
+    Grid(u16),
+    Slide,
+    Opt,
+}
+
+#[derive(Resource)]
+struct Gallery {
+    pre: Vec<PathBuf>,
+    post: Vec<Option<Handle<Image>>>,
+    layout: Layout,
+    position: usize,
+}
+
+impl Gallery {
+    #[inline]
+    fn in_bound(&self) -> bool {
+        (self.pre.len() - 1) != self.position && self.position != 0
+    }
+
+    #[inline]
+    fn in_range(&self, step: u16) -> bool {
+        !((self.pre.len() - step as usize) <= self.position)
+    }
+
+    #[inline]
+    fn valid(&self) -> bool {
+        self.pre.len() == self.post.len()
+    }
+
+    fn fetch_next(&mut self) -> &PathBuf {
+        if self.in_bound() {
+            self.position += 1;
+        } else {
+            self.position = 1;
+        }
+        &self.pre[self.position]
+    }
+
+    fn pfetch_next(&mut self, step: u16) {}
+
+    fn fetch_previous(&mut self) -> &PathBuf {
+        if self.in_bound() {
+            self.position -= 1;
+        } else {
+            self.position = self.pre.len() - 1;
+        }
+        &self.pre[self.position]
+    }
+
+    fn pfetch_previous(&mut self, step: u16) {}
+}
+
+#[derive(Resource)]
+struct Selection {
+    media: Handle<Image>,
+}
+
 fn config(mut commands: Commands) {
     let root = NodeBundle {
         style: Style {
             display: Display::Flex,
+            top: Val::Px(0.),
+            bottom: Val::Px(0.),
             flex_wrap: FlexWrap::Wrap,
             height: Val::Percent(100.),
             width: Val::Percent(100.),
             justify_content: JustifyContent::SpaceEvenly,
-            border: UiRect::all(Val::Px(0.5)),
             ..default()
         },
-        background_color: BackgroundColor(Color::GRAY),
-        border_color: BorderColor(Color::BLACK),
+        background_color: BackgroundColor(Color::WHITE),
         ..default()
     };
 
@@ -75,10 +133,64 @@ impl Plugin for Setup {
 
         let edit = DefaultPlugins.set(asset).set(window);
 
-        app.insert_resource(ClearColor(Color::DARK_GRAY))
+        app.insert_resource(ClearColor(Color::WHITE))
             .add_plugins(edit)
             .add_systems(Startup, config);
     }
+}
+
+fn insert_media(mut commands: EntityCommands, handle: Handle<Image>) {
+    commands.with_children(|pb| {
+        pb.spawn((
+            NodeBundle {
+                style: Style {
+                    display: Display::Flex,
+                    width: Val::Percent(15.),
+                    max_width: Val::Percent(15.),
+                    height: Val::Percent(15.),
+                    max_height: Val::Percent(15.),
+                    justify_content: JustifyContent::Center,
+                    margin: UiRect::all(Val::Percent(1.)),
+                    ..default()
+                },
+                ..default()
+            },
+            Media { selected: false },
+        ))
+        .with_children(|fb| {
+            fb.spawn((
+                NodeBundle {
+                    style: Style {
+                        display: Display::Flex,
+                        width: Val::Percent(100.),
+                        max_width: Val::Percent(100.),
+                        height: Val::Percent(100.),
+                        max_height: Val::Percent(100.),
+                        border: UiRect::all(Val::Px(1.)),
+                        ..default()
+                    },
+                    background_color: BackgroundColor(Color::WHITE),
+                    //border_color: BorderColor(Color::BLACK),
+                    ..default()
+                },
+                Frame,
+            ))
+            .with_children(|cb| {
+                cb.spawn((
+                    ImageBundle {
+                        image: UiImage::new(handle),
+                        style: Style {
+                            max_width: Val::Percent(90.),
+                            max_height: Val::Percent(90.),
+                            ..default()
+                        },
+                        ..default()
+                    },
+                    Content,
+                ));
+            });
+        });
+    });
 }
 
 fn render(
@@ -89,66 +201,18 @@ fn render(
     mut query: Query<Entity, With<Root>>,
 ) {
     if input.just_pressed(KeyCode::Space) {
-        for i in 1..gallery.root.len() {
+        for i in 1..gallery.pre.len() {
             match gallery.layout {
-                Layout::Grid(dim) => {
-                    let path = &gallery.root[i];
+                Layout::Grid(_) => {
+                    let path = &gallery.pre[i];
                     env::set_var("BEVY_ASSET_ROOT", path.parent().unwrap());
 
-                    let img: Handle<Image> =
+                    let handle: Handle<Image> =
                         asset_server.load(path.file_name().unwrap().to_str().unwrap());
 
-                    commands.entity(query.single_mut()).with_children(|pb| {
-                        pb.spawn((
-                            NodeBundle {
-                                style: Style {
-                                    display: Display::Flex,
-                                    width: Val::Percent(17.5),
-                                    max_width: Val::Percent(17.5),
-                                    height: Val::Percent(17.5),
-                                    max_height: Val::Percent(17.5),
-                                    justify_content: JustifyContent::Center,
-                                    margin: UiRect::all(Val::Percent(1.)),
-                                    ..default()
-                                },
-                                ..default()
-                            },
-                            Picture { selected: false },
-                        ))
-                        .with_children(|fb| {
-                            fb.spawn((
-                                NodeBundle {
-                                    style: Style {
-                                        display: Display::Flex,
-                                        width: Val::Percent(100.),
-                                        max_width: Val::Percent(100.),
-                                        height: Val::Percent(100.),
-                                        max_height: Val::Percent(100.),
-                                        border: UiRect::all(Val::Px(1.)),
-                                        ..default()
-                                    },
-                                    background_color: BackgroundColor(Color::WHITE),
-                                    border_color: BorderColor(Color::BLACK),
-                                    ..default()
-                                },
-                                Frame,
-                            ))
-                            .with_children(|cb| {
-                                cb.spawn((
-                                    ImageBundle {
-                                        image: UiImage::new(img),
-                                        style: Style {
-                                            max_width: Val::Percent(100.),
-                                            max_height: Val::Percent(100.),
-                                            ..default()
-                                        },
-                                        ..default()
-                                    },
-                                    Content,
-                                ));
-                            });
-                        });
-                    });
+                    let entity = query.single_mut();
+
+                    insert_media(commands.entity(entity), handle);
                 }
                 Layout::Slide => {}
                 Layout::Opt => return,
@@ -157,10 +221,15 @@ fn render(
     }
 }
 
-fn switch(input: Res<Input<KeyCode>>, mut query: Query<&mut Transform, With<Root>>) {
+fn switch(input: Res<Input<KeyCode>>, mut query: Query<&mut Style, With<Root>>) {
     let mut camera = query.single_mut();
-    if input.just_pressed(KeyCode::Right) {
-        camera.translation.y *= -2.;
+
+    let shift = input.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    if shift && input.pressed(KeyCode::Up) {
+        let _ = camera.top.try_add_assign(Val::Px(5.));
+    }
+    if shift && input.pressed(KeyCode::Down) {
+        let _ = camera.top.try_sub_assign(Val::Px(5.));
     }
 }
 
@@ -175,62 +244,6 @@ impl Plugin for Keybinds {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, switch).add_systems(Update, quit);
     }
-}
-
-enum Layout {
-    Grid(u16),
-    Slide,
-    Opt,
-}
-
-#[derive(Resource)]
-struct Gallery {
-    root: Vec<PathBuf>,
-    layout: Layout,
-    position: usize,
-}
-
-impl Gallery {
-    #[inline]
-    fn in_bound(&self) -> bool {
-        (self.root.len() - 1) != self.position && self.position != 0
-    }
-
-    #[inline]
-    fn in_range(&self, step: u16) -> bool {
-        !((self.root.len() - step as usize) <= self.position)
-    }
-
-    #[inline]
-    fn reset(&mut self) {
-        self.position = 1;
-    }
-
-    fn jump_next() {}
-
-    fn jump_previous() {}
-
-    fn fetch_next(&mut self) -> &PathBuf {
-        if self.in_bound() {
-            self.position += 1;
-        } else {
-            self.reset();
-        }
-        &self.root[self.position]
-    }
-
-    fn pfetch_next(&mut self, step: u16) {}
-
-    fn fetch_previous(&mut self) -> &PathBuf {
-        if self.in_bound() {
-            self.position -= 1;
-        } else {
-            self.position = self.root.len() - 1;
-        }
-        &self.root[self.position]
-    }
-
-    fn pfetch_previous(&mut self, step: u16) {}
 }
 
 fn main() -> io::Result<()> {
@@ -286,7 +299,8 @@ fn main() -> io::Result<()> {
     }
 
     let gallery = Gallery {
-        root,
+        pre: root,
+        post: Vec::new(),
         layout: Layout::Grid(4),
         position: 0,
     };
