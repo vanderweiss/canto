@@ -1,8 +1,4 @@
-use bevy::{
-    app::AppExit,
-    asset::{AssetIo, AssetIoError, ChangeWatcher, Metadata},
-    prelude::*,
-};
+use bevy::{app::AppExit, prelude::*};
 
 use ignore::WalkBuilder;
 
@@ -15,10 +11,15 @@ struct Setup;
 struct Keybinds;
 
 #[derive(Component)]
+struct Watchdog;
+
+#[derive(Component)]
 struct Root;
 
 #[derive(Component)]
-struct Picture;
+struct Picture {
+    selected: bool,
+}
 
 #[derive(Component)]
 struct Frame;
@@ -34,9 +35,11 @@ fn config(mut commands: Commands) {
             height: Val::Percent(100.),
             width: Val::Percent(100.),
             justify_content: JustifyContent::SpaceEvenly,
+            border: UiRect::all(Val::Px(0.5)),
             ..default()
         },
-        background_color: BackgroundColor(Color::WHITE),
+        background_color: BackgroundColor(Color::GRAY),
+        border_color: BorderColor(Color::BLACK),
         ..default()
     };
 
@@ -49,8 +52,8 @@ fn config(mut commands: Commands) {
         ..default()
     };
 
+    commands.spawn((Camera2dBundle::default(), Watchdog));
     commands.spawn((root, Root));
-    commands.spawn(Camera2dBundle::default());
 }
 
 impl Plugin for Setup {
@@ -86,68 +89,78 @@ fn render(
     mut query: Query<Entity, With<Root>>,
 ) {
     if input.just_pressed(KeyCode::Space) {
-        match gallery.layout {
-            Layout::Grid(dim) => {
-                let path = gallery.fetch_next();
-                env::set_var("BEVY_ASSET_ROOT", path.parent().unwrap());
+        for i in 1..gallery.root.len() {
+            match gallery.layout {
+                Layout::Grid(dim) => {
+                    let path = &gallery.root[i];
+                    env::set_var("BEVY_ASSET_ROOT", path.parent().unwrap());
 
-                let img: Handle<Image> =
-                    asset_server.load(path.file_name().unwrap().to_str().unwrap());
+                    let img: Handle<Image> =
+                        asset_server.load(path.file_name().unwrap().to_str().unwrap());
 
-                commands.entity(query.single_mut()).with_children(|pb| {
-                    pb.spawn((
-                        NodeBundle {
-                            style: Style {
-                                display: Display::Flex,
-                                width: Val::Percent(17.5),
-                                max_width: Val::Percent(17.5),
-                                height: Val::Percent(17.5),
-                                max_height: Val::Percent(17.5),
-                                justify_content: JustifyContent::Center,
-                                margin: UiRect::all(Val::Percent(1.)),
-                                ..default()
-                            },
-                            ..default()
-                        },
-                        Picture,
-                    ))
-                    .with_children(|fb| {
-                        fb.spawn((
+                    commands.entity(query.single_mut()).with_children(|pb| {
+                        pb.spawn((
                             NodeBundle {
                                 style: Style {
                                     display: Display::Flex,
-                                    width: Val::Percent(100.),
-                                    max_width: Val::Percent(100.),
-                                    height: Val::Percent(100.),
-                                    max_height: Val::Percent(100.),
-                                    border: UiRect::all(Val::Px(1.)),
+                                    width: Val::Percent(17.5),
+                                    max_width: Val::Percent(17.5),
+                                    height: Val::Percent(17.5),
+                                    max_height: Val::Percent(17.5),
+                                    justify_content: JustifyContent::Center,
+                                    margin: UiRect::all(Val::Percent(1.)),
                                     ..default()
                                 },
-                                border_color: BorderColor(Color::BLACK),
                                 ..default()
                             },
-                            Frame,
+                            Picture { selected: false },
                         ))
-                        .with_children(|cb| {
-                            cb.spawn((
-                                ImageBundle {
-                                    image: UiImage::new(img),
+                        .with_children(|fb| {
+                            fb.spawn((
+                                NodeBundle {
                                     style: Style {
+                                        display: Display::Flex,
+                                        width: Val::Percent(100.),
                                         max_width: Val::Percent(100.),
+                                        height: Val::Percent(100.),
                                         max_height: Val::Percent(100.),
+                                        border: UiRect::all(Val::Px(1.)),
                                         ..default()
                                     },
+                                    background_color: BackgroundColor(Color::WHITE),
+                                    border_color: BorderColor(Color::BLACK),
                                     ..default()
                                 },
-                                Content,
-                            ));
+                                Frame,
+                            ))
+                            .with_children(|cb| {
+                                cb.spawn((
+                                    ImageBundle {
+                                        image: UiImage::new(img),
+                                        style: Style {
+                                            max_width: Val::Percent(100.),
+                                            max_height: Val::Percent(100.),
+                                            ..default()
+                                        },
+                                        ..default()
+                                    },
+                                    Content,
+                                ));
+                            });
                         });
                     });
-                });
+                }
+                Layout::Slide => {}
+                Layout::Opt => return,
             }
-            Layout::Slide => {}
-            Layout::Opt => return,
         }
+    }
+}
+
+fn switch(input: Res<Input<KeyCode>>, mut query: Query<&mut Transform, With<Root>>) {
+    let mut camera = query.single_mut();
+    if input.just_pressed(KeyCode::Right) {
+        camera.translation.y *= -2.;
     }
 }
 
@@ -160,7 +173,7 @@ fn quit(input: Res<Input<KeyCode>>, mut exit: EventWriter<AppExit>) {
 
 impl Plugin for Keybinds {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, quit);
+        app.add_systems(Update, switch).add_systems(Update, quit);
     }
 }
 
@@ -183,6 +196,16 @@ impl Gallery {
         (self.root.len() - 1) != self.position && self.position != 0
     }
 
+    #[inline]
+    fn in_range(&self, step: u16) -> bool {
+        !((self.root.len() - step as usize) <= self.position)
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.position = 1;
+    }
+
     fn jump_next() {}
 
     fn jump_previous() {}
@@ -191,7 +214,7 @@ impl Gallery {
         if self.in_bound() {
             self.position += 1;
         } else {
-            self.position = 1;
+            self.reset();
         }
         &self.root[self.position]
     }
@@ -216,8 +239,6 @@ fn main() -> io::Result<()> {
 
     // temp
     args.remove(0);
-    args.pop();
-    args.pop();
 
     let mut root: Vec<PathBuf> = Vec::new();
 
