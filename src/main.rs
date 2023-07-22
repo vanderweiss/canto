@@ -164,20 +164,7 @@ impl Plugin for Keybinds {
     }
 }
 
-fn traverse(root: &mut Vec<PathBuf>, path: PathBuf) {
-    for _file in path.read_dir().unwrap() {
-        if let Ok(file) = _file {
-            let path = file.path();
-            if path.is_dir() {
-                traverse(root, path);
-            } else {
-                root.push(path);
-            }
-        };
-    }
-}
-
-enum Layout {
+num Layout {
     Grid(u16),
     Slide,
     Opt,
@@ -219,6 +206,8 @@ impl Gallery {
         }
         &self.root[self.position]
     }
+
+    fn pfetch_previous(&mut self, step: u16) {}
 }
 
 fn main() -> io::Result<()> {
