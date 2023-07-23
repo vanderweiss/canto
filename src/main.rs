@@ -7,6 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const X: f32 = 1000.;
+const Y: f32 = 550.;
+
 struct Setup;
 struct Keybinds;
 
@@ -28,7 +31,7 @@ struct Frame;
 struct Content;
 
 enum Layout {
-    Grid(u16),
+    Display,
     Slide,
     Opt,
 }
@@ -80,11 +83,6 @@ impl Gallery {
     fn pfetch_previous(&mut self, step: u16) {}
 }
 
-#[derive(Resource)]
-struct Selection {
-    media: Handle<Image>,
-}
-
 fn config(mut commands: Commands) {
     let root = NodeBundle {
         style: Style {
@@ -95,6 +93,9 @@ fn config(mut commands: Commands) {
             height: Val::Percent(100.),
             width: Val::Percent(100.),
             justify_content: JustifyContent::SpaceEvenly,
+            margin: UiRect::all(Val::Percent(2.5)),
+            row_gap: Val::Percent(5.),
+            column_gap: Val::Percent(2.5),
             ..default()
         },
         background_color: BackgroundColor(Color::WHITE),
@@ -123,9 +124,9 @@ impl Plugin for Setup {
 
         let window = WindowPlugin {
             primary_window: Some(Window {
-                resolution: [1000.0, 550.0].into(),
+                resolution: [X, Y].into(),
                 title: "Canto".to_string(),
-                resizable: false,
+                resizable: true,
                 ..default()
             }),
             ..default()
@@ -139,18 +140,22 @@ impl Plugin for Setup {
     }
 }
 
-fn insert_media(mut commands: EntityCommands, handle: Handle<Image>) {
+fn insert_media(mut commands: EntityCommands, handle: Handle<Image>, image: &Image) {
+    let size = image.size();
+    let (mut x, mut y) = (size.x, size.y);
+
+    while X * 0.4 < x || Y * 0.4 < y {
+        x *= 0.75;
+        y *= 0.75;
+    }
+
     commands.with_children(|pb| {
         pb.spawn((
             NodeBundle {
                 style: Style {
-                    display: Display::Flex,
-                    width: Val::Percent(15.),
-                    max_width: Val::Percent(15.),
-                    height: Val::Percent(15.),
-                    max_height: Val::Percent(15.),
+                    width: Val::Px(x),
+                    height: Val::Px(y),
                     justify_content: JustifyContent::Center,
-                    margin: UiRect::all(Val::Percent(1.)),
                     ..default()
                 },
                 ..default()
@@ -161,11 +166,8 @@ fn insert_media(mut commands: EntityCommands, handle: Handle<Image>) {
             fb.spawn((
                 NodeBundle {
                     style: Style {
-                        display: Display::Flex,
                         width: Val::Percent(100.),
-                        max_width: Val::Percent(100.),
                         height: Val::Percent(100.),
-                        max_height: Val::Percent(100.),
                         border: UiRect::all(Val::Px(1.)),
                         ..default()
                     },
@@ -180,8 +182,8 @@ fn insert_media(mut commands: EntityCommands, handle: Handle<Image>) {
                     ImageBundle {
                         image: UiImage::new(handle),
                         style: Style {
-                            max_width: Val::Percent(90.),
-                            max_height: Val::Percent(90.),
+                            width: Val::Percent(100.),
+                            height: Val::Percent(100.),
                             ..default()
                         },
                         ..default()
@@ -195,24 +197,29 @@ fn insert_media(mut commands: EntityCommands, handle: Handle<Image>) {
 
 fn render(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    assets: ResMut<Assets<Image>>,
+    server: Res<AssetServer>,
     input: Res<Input<KeyCode>>,
-    mut gallery: ResMut<Gallery>,
+    gallery: ResMut<Gallery>,
     mut query: Query<Entity, With<Root>>,
 ) {
     if input.just_pressed(KeyCode::Space) {
-        for i in 1..gallery.pre.len() {
+        for i in 0..gallery.pre.len() {
             match gallery.layout {
-                Layout::Grid(_) => {
+                Layout::Display => {
                     let path = &gallery.pre[i];
                     env::set_var("BEVY_ASSET_ROOT", path.parent().unwrap());
 
                     let handle: Handle<Image> =
-                        asset_server.load(path.file_name().unwrap().to_str().unwrap());
+                        server.load(path.file_name().unwrap().to_str().unwrap());
 
-                    let entity = query.single_mut();
+                    let fetch = assets.get(&handle);
 
-                    insert_media(commands.entity(entity), handle);
+                    if let Some(ref image) = fetch {
+                        insert_media(commands.entity(query.single_mut()), handle, image);
+                    } else {
+                        continue;
+                    }
                 }
                 Layout::Slide => {}
                 Layout::Opt => return,
@@ -222,14 +229,17 @@ fn render(
 }
 
 fn switch(input: Res<Input<KeyCode>>, mut query: Query<&mut Style, With<Root>>) {
-    let mut camera = query.single_mut();
+    let mut root = query.single_mut();
+
+    let focus = root.top.evaluate(1.).unwrap();
 
     let shift = input.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    if shift && input.pressed(KeyCode::Up) {
-        let _ = camera.top.try_add_assign(Val::Px(5.));
+
+    if shift && input.pressed(KeyCode::Up) && focus <= 0. {
+        let _ = root.top.try_add_assign(Val::Px(5.));
     }
     if shift && input.pressed(KeyCode::Down) {
-        let _ = camera.top.try_sub_assign(Val::Px(5.));
+        let _ = root.top.try_sub_assign(Val::Px(5.));
     }
 }
 
@@ -285,8 +295,9 @@ fn main() -> io::Result<()> {
     };
 
     for result in builder
+        .git_exclude(false)
+        .git_global(false)
         .git_ignore(false)
-        .hidden(false)
         .max_depth(Some(3))
         .build()
     {
@@ -301,7 +312,7 @@ fn main() -> io::Result<()> {
     let gallery = Gallery {
         pre: root,
         post: Vec::new(),
-        layout: Layout::Grid(4),
+        layout: Layout::Display,
         position: 0,
     };
 
